@@ -1,6 +1,8 @@
+#pragma once
+
 #include "common.h"
 
-class AnchorTargetLayer : public AbstractCustomLayer {
+class AnchorTargetLayer : public BaseLayer {
 public:
 	SETUP_LAYERFUNC(AnchorTargetLayer);
 
@@ -19,9 +21,6 @@ private:
 	int _allowed_border;
 
 private:
-	vector<BBox> generate_anchors(int base_size = 16, const vector<float>& ratios = { 0.5, 1, 2 }, const vector<float>& scales = { pow(2.0f, 3.0f), pow(2.0f, 4.0f), pow(2.0f, 5.0f) });
-
-	Mat makeShifts(int feat_stride, int width, int height);
 	
 	Mat unmap(Mat data, int total_anchors, vector<int> inds_inside, int fill);
 };

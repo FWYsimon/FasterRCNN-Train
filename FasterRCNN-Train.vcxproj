@@ -35,6 +35,7 @@
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v120</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
+    <UseOfMfc>Static</UseOfMfc>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -49,6 +50,7 @@
     <PlatformToolset>v120</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
+    <UseOfMfc>Static</UseOfMfc>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -146,6 +148,8 @@
     <ClCompile Include="AnchorTargetLayer.cpp" />
     <ClCompile Include="common.cpp" />
     <ClCompile Include="FasterRCNN-Train.cpp" />
+    <ClCompile Include="ProposalLayer.cpp" />
+    <ClCompile Include="ProposalTargetLayer.cpp" />
     <ClCompile Include="readxml.cpp" />
     <ClCompile Include="RoiDataLayer.cpp" />
     <ClCompile Include="tinyxml\tinystr.cpp" />
@@ -156,6 +160,8 @@
   <ItemGroup>
     <ClInclude Include="AnchorTargetLayer.h" />
     <ClInclude Include="common.h" />
+    <ClInclude Include="ProposalLayer.h" />
+    <ClInclude Include="ProposalTargetLayer.h" />
     <ClInclude Include="readxml.h" />
     <ClInclude Include="RoiDataLayer.h" />
     <ClInclude Include="tinyxml\tinystr.h" />

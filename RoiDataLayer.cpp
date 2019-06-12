@@ -1,54 +1,43 @@
 #include "RoiDataLayer.h"
 
-#pragma comment(lib, "libcaffe.lib")
-
-RoiDataLayer::~RoiDataLayer() {
-	stopBatchLoader();
-}
-
 void RoiDataLayer::setup(const char* name, const char* type, const char* param_str, 
 	int phase, Blob** bottom, int numBottom, Blob** top, int numTop) {
 	map<string, string> param = parseParamStr(param_str);
 
-	int is_RPN = getParamInt(param, "is_PRN");
-	int is_BBox_Reg = getParamInt(param, "is_BBox_Reg");
 	int batch_size = getParamInt(param, "batch_size");
 	const int width = getParamInt(param, "width");
 	const int height = getParamInt(param, "height");
 	const int numClass = getParamInt(param, "num_classes");
 
+	means = Scalar(102.9801, 115.9465, 122.7717);
 
 	this->_num_classes = numClass;
-	this->_is_RPN = is_RPN;
-	this->_is_BBox_Reg = is_BBox_Reg;
 	Blob* image = top[0];
-	image->Reshape(batch_size, 3, height, width);
-	if (is_RPN) {
+	image->reshape(batch_size, 3, height, width);
+	if (cfg.TRAIN.HAS_RPN) {
 		//rpnÍøÂçbatch_sizeÖ»ÄÜÎª1
 		CV_Assert(batch_size == 1);
 		Blob* im_info = top[1];
 		Blob* gt_boxes = top[2];
-		im_info->Reshape(1, 3);
-		gt_boxes->Reshape(1, 4);
+		im_info->reshape(1, 3);
+		gt_boxes->reshape(1, 4);
 	}
 	else {
 		Blob* rois = top[1];
 		Blob* labels = top[2];
-		rois->Reshape(1, 5);
-		labels->Reshape(1);
-		if (is_BBox_Reg) {
+		rois->reshape(1, 5);
+		labels->reshape(1);
+		if (cfg.TRAIN.BBOX_REG) {
 			Blob* bbox_target = top[3];
 			Blob* bbox_inside_weights = top[4];
 			Blob* bbox_outside_weights = top[5];
-			bbox_target->Reshape(1, numClass * 4);
-			bbox_inside_weights->Reshape(1, numClass * 4);
-			bbox_outside_weights->Reshape(1, numClass * 4);
+			bbox_target->reshape(1, numClass * 4);
+			bbox_inside_weights->reshape(1, numClass * 4);
+			bbox_outside_weights->reshape(1, numClass * 4);
 		}
-		
 	}
 
 	prepareData();
-	__super::setup(name, type, param_str, phase, bottom, numBottom, top, numTop);
 }
 
 void RoiDataLayer::prepareData() {
@@ -82,12 +71,10 @@ void RoiDataLayer::prepareData() {
 
 			roi oneImageData;
 			vector<vector<float>> tmp_gt_overlaps;
-			if (_is_RPN) {
+			if (cfg.TRAIN.HAS_RPN) {
 				vector<string>::iterator it;
-				vector<vector<float>> tmp_gt_overlaps;
 				for (int m = 0; m < tmpXmlInfo.size(); m++) {
 					vector<float> tmp_gt_overlap(_num_classes, 0.0f);
-
 
 					int classId = g_labelmap[tmpXmlInfo[m].slabel];
 					tmp_gt_overlap[classId] = 1.0;
@@ -102,12 +89,12 @@ void RoiDataLayer::prepareData() {
 					vector<float> tmp_gt_overlap(_num_classes, 0.0f);
 					vector<float>::iterator biggest = max_element(begin(gt_overlaps_matrix[m]), end(gt_overlaps_matrix[m]));
 					
-					int num_gt_box = distance(begin(gt_overlaps_matrix[m], biggest));
+					int num_gt_box = distance(begin(gt_overlaps_matrix[m]), biggest);
 
 					int classId = g_labelmap[tmpXmlInfo[num_gt_box].slabel];
 					
 					tmp_gt_overlap[classId] = *biggest;
-					tmp_gt_overlaps.push_back(tmp_gt_overlaps);
+					tmp_gt_overlaps.push_back(tmp_gt_overlap);
 					max_classes.push_back(classId);
 					maxes.push_back(*biggest);
 				}
@@ -121,16 +108,17 @@ void RoiDataLayer::prepareData() {
 					vector<int> gt_inds;
 					vector<BBox> gt_inds_boxes;
 					vector<int> ex_inds;
-					vector<BBox> ex_rois;
+					Mat ex_rois;
 					for (int m = 0; m < maxes.size(); m++) {
 						if (maxes[m] == 1) {
 							gt_inds.push_back(m);
-							gt_inds_boxes.push_back(maxes[m]);
+							gt_inds_boxes.push_back(rois[m]);
 						}
 							
 						if (maxes[m] >= cfg.TRAIN.BBOX_THRESH) {
 							ex_inds.push_back(m);
-							ex_rois.push_back(maxes[m]);
+							vector<float> vec_rois = { rois[m].xmin, rois[m].ymin, rois[m].xmax, rois[m].ymax };
+							ex_rois.push_back(Mat(1, vec_rois.size(), CV_32F, vec_rois.data()));
 						}
 					}
 
@@ -138,13 +126,16 @@ void RoiDataLayer::prepareData() {
 						vector<vector<float>> ex_gt_overlaps = bbox_overlaps(ex_rois, gt_inds_boxes);
 
 						//vector<float> gt_assignment;
-						vector<BBox> gt_rois;
+						Mat gt_rois;
 						for (int m = 0; m < ex_gt_overlaps.size(); m++) {
 							vector<float>::iterator biggest = max_element(begin(ex_gt_overlaps[m]), end(ex_gt_overlaps[m]));
 
-							int gt_assignment = distance(begin(ex_gt_overlaps[m], biggest));
+							int gt_assignment = distance(ex_gt_overlaps[m].begin(), biggest);
 							//gt_assignment.push_back(distance(begin(ex_gt_overlaps[m], biggest)));
-							gt_rois.push_back(rois[gt_inds[gt_assignment]]);
+							BBox tmp = rois[gt_inds[gt_assignment]];
+							vector<float> vec_tmp = { tmp.xmin, tmp.ymin, tmp.xmax, tmp.ymax };
+
+							gt_rois.push_back(Mat(1, vec_tmp.size(), CV_32F, vec_tmp.data()));
 						}
 
 						Mat bbox_transform_mat = bbox_transform(ex_rois, gt_rois);
@@ -197,7 +188,7 @@ void RoiDataLayer::prepareData() {
 								}
 							}
 							if (cls_inds.size() > 0) {
-								class_counts.at<float>(m, 0) += Scalar(cls_inds.size());
+								class_counts.at<float>(m, 0) += cls_inds.size();
 								vector<float> tmp_sums;
 								vector<float> tmp_pow_sums;
 								for (int n = 0; n < cls_vals.cols; n++) {
@@ -251,7 +242,7 @@ void RoiDataLayer::prepareData() {
 			
 			oneImageData.gt_overlaps = tmp_gt_overlaps;
 			oneImageData.xmlInfo = tmpXmlInfo;
-			_map_data.insert(tmpImagePath, oneImageData);
+			_map_data.insert(make_pair(tmpImagePath, oneImageData));
 		}
 
 	}
@@ -281,14 +272,14 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 		resize(im, im, Size(), im_scale, im_scale, CV_INTER_LINEAR);
 
 		im.convertTo(im, CV_32F);
-		im -= means;
-		image->setDataRGB(i, im);
+		im -= this->means;
+		image->setData(i, im);
 
-		if (_is_RPN) {
+		if (cfg.TRAIN.HAS_RPN) {
 			Blob* im_info = top[1];
 			Blob* gt_boxes = top[2];
 			float* im_info_ptr = im_info->mutable_cpu_data();
-			gt_boxes->Reshape(1, 5, _map_data[imageName].xmlInfo.size(), 1);
+			gt_boxes->reshape(_map_data[imageName].xmlInfo.size(), 5, 1, 1);
 			Mat blob(_map_data[imageName].xmlInfo.size(), 5, CV_32F, top[2]->mutable_cpu_data());
 			for (int j = 0; j < _map_data[imageName].xmlInfo.size(); j++) {
 				float* gt_boxes_ptr = blob.ptr<float>(j);
@@ -319,7 +310,7 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 			vector<vector<float>> gt_overlaps = _map_data[imageName].gt_overlaps;
 			vector<int> labels = _map_data[imageName].max_classes;
 			vector<BBox> rois = _map_data[imageName].boxes;
-			vector<float> max_overlaps = _map_data[imageName].max_overlaps;
+			vector<int> max_overlaps = _map_data[imageName].max_overlaps;
 			Mat bbox_targets_data = _map_data[imageName].bbox_targets;
 
 			//vector<int>
@@ -327,7 +318,7 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 			vector<int> fg_inds;
 			vector<int> bg_inds;
 			for (int j = 0; j < gt_overlaps.size(); j++) {
-				vector<float>::iterator biggest = max_element(begin(gt_overlaps), end(gt_overlaps));
+				vector<float>::iterator biggest = max_element(gt_overlaps[j].begin(), gt_overlaps[j].end());
 				//max_overlaps.push_back(*biggest);
 				if (*biggest >= cfg.TRAIN.FG_THRESH)
 					fg_inds.push_back(j);
@@ -355,15 +346,15 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 			vector<BBox> rois_keeps;
 
 			for (int j = 0; j < keep_inds.size(); j++) {
-				labels_keeps.push_back(labels.begin() + keep_inds[j]);
-				gt_overlaps_keeps.push_back(gt_overlaps.begin() + keep_inds[j]);
-				rois_keeps.push_back(rois.begin() + keep_inds[j]);
+				labels_keeps.push_back(labels[keep_inds[j]]);
+				gt_overlaps_keeps.push_back(gt_overlaps[keep_inds[j]]);
+				rois_keeps.push_back(rois[keep_inds[j]]);
 			}
 			
 			for (int j = 0; j < bg_rois_per_this_image; j++)
 				labels[bg_inds[j]] = 0;
 
-			rois_blob->Reshape(1, gt_overlaps_keeps.size(), 5, 1);
+			rois_blob->reshape(1, gt_overlaps_keeps.size(), 5, 1);
 			Mat rois_mat(gt_overlaps_keeps.size(), 5, CV_32F, top[1]->mutable_cpu_data());
 			for (int j = 0; j < rois_keeps.size(); j++) {
 				float* rois_ptr = rois_mat.ptr<float>(j);
@@ -378,10 +369,10 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 				rois_ptr[4] = rois_keeps[j].ymax;
 			}
 
-			labels_blob->Reshape(1, gt_overlaps_keeps.size(), 1, 1);
+			labels_blob->reshape(1, gt_overlaps_keeps.size(), 1, 1);
 			Mat labels_mat(gt_overlaps_keeps.size(), 1, CV_32F, top[2]->mutable_cpu_data());
 			for (int j = 0; j < labels_keeps.size(); j++) {
-				float* label_ptr = labels_mat.ptr<int>(j);
+				float* label_ptr = labels_mat.ptr<float>(j);
 				label_ptr[0] = labels_keeps[j];
 			}
 
@@ -402,10 +393,10 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 					int ind = inds[j];
 					int cls = clss[ind];
 					int start = 4 * cls;
-					bbox_targets.at<float>(ind, start) = bbox_targets_data[ind, 1];
-					bbox_targets.at<float>(ind, start + 1) = bbox_targets_data[ind, 2];
-					bbox_targets.at<float>(ind, start + 2) = bbox_targets_data[ind, 3];
-					bbox_targets.at<float>(ind, start + 3) = bbox_targets_data[ind, 4];
+					bbox_targets.at<float>(ind, start) = bbox_targets_data.at<float>(ind, 1);
+					bbox_targets.at<float>(ind, start + 1) = bbox_targets_data.at<float>(ind, 2);
+					bbox_targets.at<float>(ind, start + 2) = bbox_targets_data.at<float>(ind, 3);
+					bbox_targets.at<float>(ind, start + 3) = bbox_targets_data.at<float>(ind, 4);
 					bbox_inside_weights.at<float>(ind, start) = cfg.TRAIN.BBOX_INSIDE_WEIGHTS[0];
 					bbox_inside_weights.at<float>(ind, start + 1) = cfg.TRAIN.BBOX_INSIDE_WEIGHTS[1];
 					bbox_inside_weights.at<float>(ind, start + 2) = cfg.TRAIN.BBOX_INSIDE_WEIGHTS[2];
@@ -416,7 +407,7 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 					bbox_outside_weights.at<float>(ind, start + 3) = cfg.TRAIN.BBOX_INSIDE_WEIGHTS[3];
 				}
 
-				bbox_targets_blob->Reshape(1, gt_overlaps_keeps.size(), 4 * _num_classes, 1);
+				bbox_targets_blob->reshape(1, gt_overlaps_keeps.size(), 4 * _num_classes, 1);
 				Mat bbox_targets_mat(gt_overlaps_keeps.size(), 4, CV_32F, top[3]->mutable_cpu_data());
 				Mat bbox_inside_weights_mat(gt_overlaps_keeps.size(), 4, CV_32F, top[4]->mutable_cpu_data());
 				Mat bbox_outside_weights_mat(gt_overlaps_keeps.size(), 4, CV_32F, top[5]->mutable_cpu_data());
@@ -443,3 +434,14 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 }
 
 
+void RoiDataLayer::forward(Blob** bottom, int numBottom, Blob** top, int numTop) {
+	loadBatch(top, numTop);
+}
+
+void RoiDataLayer::backward(Blob** bottom, int numBottom, Blob** top, int numTop, const bool* propagate_down) {
+
+}
+
+void RoiDataLayer::reshape(Blob** bottom, int numBottom, Blob** top, int numTop) {
+
+}

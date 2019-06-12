@@ -41,6 +41,12 @@
     <ClCompile Include="tinyxml\tinyxmlparser.cpp">
       <Filter>tinyxml</Filter>
     </ClCompile>
+    <ClCompile Include="ProposalLayer.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ProposalTargetLayer.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="RoiDataLayer.h">
@@ -60,6 +66,12 @@
     </ClInclude>
     <ClInclude Include="tinyxml\tinyxml.h">
       <Filter>tinyxml</Filter>
+    </ClInclude>
+    <ClInclude Include="ProposalLayer.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ProposalTargetLayer.h">
+      <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
