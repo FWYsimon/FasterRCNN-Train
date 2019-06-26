@@ -12,9 +12,9 @@ struct roi{
 	Mat bbox_targets;
 };
 
-class RoiDataLayer : public BaseLayer {
+class RoIDataLayer : public BaseLayer {
 public:
-	SETUP_LAYERFUNC(RoiDataLayer);
+	SETUP_LAYERFUNC(RoIDataLayer);
 
 	void prepareData();
 	void loadBatch(Blob** top, int numTop);
@@ -41,8 +41,6 @@ private:
 
 	int _num_classes;
 	int _cursor = 0;
-
-	Scalar means;
 
 	const char* classname;
 	//= {

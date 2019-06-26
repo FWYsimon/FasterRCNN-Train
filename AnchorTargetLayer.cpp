@@ -96,7 +96,7 @@ void AnchorTargetLayer::forward(Blob** bottom, int numBottom, Blob** top, int nu
 		bbox.ymax = gt_boxes_mat.at<float>(i, 3);
 		vec_gt_boxes.push_back(bbox);
 	}
-	vector<vector<float>> overlaps = bbox_overlaps(vec_gt_boxes, keep_anchors);
+	vector<vector<float>> overlaps = bbox_overlaps(keep_anchors, vec_gt_boxes);
 
 	vector<int> argmax_overlaps;
 	vector<float> max_overlaps;
@@ -172,6 +172,7 @@ void AnchorTargetLayer::forward(Blob** bottom, int numBottom, Blob** top, int nu
 		random_shuffle(bg_inds.begin(), bg_inds.end());
 		for (int i = num_bg; i < bg_inds.size(); ++i)
 			labels[bg_inds[i]] = -1;
+		//bg_inds.erase(bg_inds.end() - num_bg, bg_inds.end());
 	}
 
 	//vector<vector<float>> bbox_targets(keep_inds.size(), vector<float>(4, 0));
@@ -215,10 +216,18 @@ void AnchorTargetLayer::forward(Blob** bottom, int numBottom, Blob** top, int nu
 
 	Mat bbox_outside_weights(keep_anchors.size(), 4, CV_32F, Scalar(0));
 	for (int i = 0; i < bbox_outside_weights.rows; i++) {
-		if (labels[i] == 1)
-			bbox_outside_weights.row(i) = positive_weights.row(0);
-		else if (labels[i] == 0)
-			bbox_outside_weights.row(i) = negative_weights.row(0);
+		if (labels[i] == 1) {
+			bbox_outside_weights.at<float>(i, 0) = positive_weights.at<float>(0, 0);
+			bbox_outside_weights.at<float>(i, 1) = positive_weights.at<float>(0, 1);
+			bbox_outside_weights.at<float>(i, 2) = positive_weights.at<float>(0, 2);
+			bbox_outside_weights.at<float>(i, 3) = positive_weights.at<float>(0, 3);
+		}
+		else if (labels[i] == 0) {
+			bbox_outside_weights.at<float>(i, 0) = negative_weights.at<float>(0, 0);
+			bbox_outside_weights.at<float>(i, 1) = negative_weights.at<float>(0, 1);
+			bbox_outside_weights.at<float>(i, 2) = negative_weights.at<float>(0, 2);
+			bbox_outside_weights.at<float>(i, 3) = negative_weights.at<float>(0, 3);
+		}
 	}
 
 	Mat labels_mat(keep_inds.size(), 1, CV_32F);
@@ -226,7 +235,7 @@ void AnchorTargetLayer::forward(Blob** bottom, int numBottom, Blob** top, int nu
 		labels_mat.at<float>(i) = labels[i];
 
 	labels_mat = unmap(labels_mat, total_anchors, keep_inds, -1);
-	bbox_targets = unmap(bbox_targets, total_anchors, keep_inds, 0); //bbox_target (9*14*14, 4) 每36个数变为一行 为图的第一个像素的9个anchor的4个偏移值
+	bbox_targets = unmap(bbox_targets, total_anchors, keep_inds, 0); //bbox_target (9*height*width, 4) 每36个数变为一行 为图的第一个像素的9个anchor的4个偏移值
 	bbox_inside_weights = unmap(bbox_inside_weights, total_anchors, keep_inds, 0);
 	bbox_outside_weights = unmap(bbox_outside_weights, total_anchors, keep_inds, 0);
 

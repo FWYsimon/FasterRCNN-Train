@@ -47,6 +47,12 @@
     <ClCompile Include="ProposalTargetLayer.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Test.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="visualize.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="RoiDataLayer.h">
@@ -71,6 +77,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ProposalTargetLayer.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="visualize.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

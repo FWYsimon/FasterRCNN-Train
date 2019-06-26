@@ -1,22 +1,22 @@
 #include "RoiDataLayer.h"
 
-void RoiDataLayer::setup(const char* name, const char* type, const char* param_str, 
+void RoIDataLayer::setup(const char* name, const char* type, const char* param_str,
 	int phase, Blob** bottom, int numBottom, Blob** top, int numTop) {
 	map<string, string> param = parseParamStr(param_str);
 
-	int batch_size = getParamInt(param, "batch_size");
-	const int width = getParamInt(param, "width");
-	const int height = getParamInt(param, "height");
+	//int batch_size = getParamInt(param, "batch_size");
+	//const int width = getParamInt(param, "width");
+	//const int height = getParamInt(param, "height");
 	const int numClass = getParamInt(param, "num_classes");
-
-	means = Scalar(102.9801, 115.9465, 122.7717);
 
 	this->_num_classes = numClass;
 	Blob* image = top[0];
-	image->reshape(batch_size, 3, height, width);
+	Blob* raw_image = top[3];
+	image->reshape(cfg.TRAIN.IMS_PER_BATCH, 3, cfg.TRAIN.SCALES, cfg.TRAIN.MAX_SIZE);
+	raw_image->reshape(cfg.TRAIN.IMS_PER_BATCH, 3, cfg.TRAIN.SCALES, cfg.TRAIN.MAX_SIZE);
 	if (cfg.TRAIN.HAS_RPN) {
 		//rpn网络batch_size只能为1
-		CV_Assert(batch_size == 1);
+		CV_Assert(cfg.TRAIN.IMS_PER_BATCH == 1);
 		Blob* im_info = top[1];
 		Blob* gt_boxes = top[2];
 		im_info->reshape(1, 3);
@@ -40,224 +40,223 @@ void RoiDataLayer::setup(const char* name, const char* type, const char* param_s
 	prepareData();
 }
 
-void RoiDataLayer::prepareData() {
-	PaVfiles vfsFloder;
-	paFindFilesShort(config.datapath.c_str(), vfsFloder, "*", false, true, PaFindFileType_Directory);
+void RoIDataLayer::prepareData() {
+	PaVfiles vfs;
+	paFindFilesShort(config.datapath.c_str(), vfs, "*.jpg", false, true, PaFindFileType_File);
 
 	//_vecClassName.insert(_vecClassName.begin(), classname, classname + 21);
 	vector<string> vecImagePath;
 	vector<XMLInfo> vecXmlInfo;
-	for (int i = 0; i < vfsFloder.size(); i++) {
-		string label = vfsFloder[i];
+	for (int i = 0; i < vfs.size(); i++) {
+		string xmlfile = config.xmlpath + "/" + vfs[i].substr(0, vfs[i].length() - 4) + ".xml";
 
-		PaVfiles vfs;
-		paFindFiles((config.datapath + "/" + vfsFloder[i]).c_str(), vfs, "*.xml");
-		for (int j = 0; j < vfs.size(); j++) {
-			vector<XMLInfo> tmpXmlInfo = _readXmlClass.GetXmlInfo(vfs[j], "");
+		vector<XMLInfo> tmpXmlInfo = _readXmlClass.GetXmlInfo(xmlfile, "");
 
-			string tmpImagePath = vfs[j].substr(0, vfs[j].length() - 4) + ".jpg";
-			//_mapData.insert(make_pair(tmpImagePath, tmpXmlInfo));
-			_vecImageName.push_back(tmpImagePath);
+		string tmpImagePath = config.datapath + "/" + vfs[i];
+		//_mapData.insert(make_pair(tmpImagePath, tmpXmlInfo));
+		_vecImageName.push_back(tmpImagePath);
 
-			vector<BBox> gt_boxes;
-			for (int m = 0; m < tmpXmlInfo.size(); m++) {
-				BBox tmp;
-				tmp.xmin = tmpXmlInfo[m].xmin;
-				tmp.ymin = tmpXmlInfo[m].ymin;
-				tmp.xmax = tmpXmlInfo[m].xmax;
-				tmp.ymax = tmpXmlInfo[m].ymax;
-				gt_boxes.push_back(tmp);
-			}
-
-			roi oneImageData;
-			vector<vector<float>> tmp_gt_overlaps;
-			if (cfg.TRAIN.HAS_RPN) {
-				vector<string>::iterator it;
-				for (int m = 0; m < tmpXmlInfo.size(); m++) {
-					vector<float> tmp_gt_overlap(_num_classes, 0.0f);
-
-					int classId = g_labelmap[tmpXmlInfo[m].slabel];
-					tmp_gt_overlap[classId] = 1.0;
-					tmp_gt_overlaps.push_back(tmp_gt_overlap);
-				}
-			}
-			else {
-				vector<vector<float>> gt_overlaps_matrix = bbox_overlaps(gt_boxes, rpn_generate_bbox[tmpImagePath]);
-				vector<int> maxes;
-				vector<int> max_classes;
-				for (int m = 0; m < gt_overlaps_matrix.size(); m++) {
-					vector<float> tmp_gt_overlap(_num_classes, 0.0f);
-					vector<float>::iterator biggest = max_element(begin(gt_overlaps_matrix[m]), end(gt_overlaps_matrix[m]));
-					
-					int num_gt_box = distance(begin(gt_overlaps_matrix[m]), biggest);
-
-					int classId = g_labelmap[tmpXmlInfo[num_gt_box].slabel];
-					
-					tmp_gt_overlap[classId] = *biggest;
-					tmp_gt_overlaps.push_back(tmp_gt_overlap);
-					max_classes.push_back(classId);
-					maxes.push_back(*biggest);
-				}
-				oneImageData.max_classes = max_classes;
-				oneImageData.max_overlaps = maxes;
-				oneImageData.boxes = rpn_generate_bbox[tmpImagePath];
-
-				vector<BBox> rois = rpn_generate_bbox[tmpImagePath];
-				if (cfg.TRAIN.BBOX_REG) {
-					Mat bbox_targets(rois.size(), 5, CV_32F, Scalar(0));
-					vector<int> gt_inds;
-					vector<BBox> gt_inds_boxes;
-					vector<int> ex_inds;
-					Mat ex_rois;
-					for (int m = 0; m < maxes.size(); m++) {
-						if (maxes[m] == 1) {
-							gt_inds.push_back(m);
-							gt_inds_boxes.push_back(rois[m]);
-						}
-							
-						if (maxes[m] >= cfg.TRAIN.BBOX_THRESH) {
-							ex_inds.push_back(m);
-							vector<float> vec_rois = { rois[m].xmin, rois[m].ymin, rois[m].xmax, rois[m].ymax };
-							ex_rois.push_back(Mat(1, vec_rois.size(), CV_32F, vec_rois.data()));
-						}
-					}
-
-					if (gt_inds.size() != 0) {
-						vector<vector<float>> ex_gt_overlaps = bbox_overlaps(ex_rois, gt_inds_boxes);
-
-						//vector<float> gt_assignment;
-						Mat gt_rois;
-						for (int m = 0; m < ex_gt_overlaps.size(); m++) {
-							vector<float>::iterator biggest = max_element(begin(ex_gt_overlaps[m]), end(ex_gt_overlaps[m]));
-
-							int gt_assignment = distance(ex_gt_overlaps[m].begin(), biggest);
-							//gt_assignment.push_back(distance(begin(ex_gt_overlaps[m], biggest)));
-							BBox tmp = rois[gt_inds[gt_assignment]];
-							vector<float> vec_tmp = { tmp.xmin, tmp.ymin, tmp.xmax, tmp.ymax };
-
-							gt_rois.push_back(Mat(1, vec_tmp.size(), CV_32F, vec_tmp.data()));
-						}
-
-						Mat bbox_transform_mat = bbox_transform(ex_rois, gt_rois);
-
-						for (int m = 0; m < ex_inds.size(); m++) {
-							bbox_targets.at<float>(ex_inds[m], 0) = max_classes[ex_inds[m]];
-							bbox_targets.at<float>(ex_inds[m], 1) = bbox_transform_mat.at<float>(m, 0);
-							bbox_targets.at<float>(ex_inds[m], 2) = bbox_transform_mat.at<float>(m, 1);
-							bbox_targets.at<float>(ex_inds[m], 3) = bbox_transform_mat.at<float>(m, 2);
-							bbox_targets.at<float>(ex_inds[m], 4) = bbox_transform_mat.at<float>(m, 3);
-						}
-					}
-					
-					Mat means(_num_classes, 4, CV_32F);
-					Mat stds(_num_classes, 4, CV_32F);
-					if (cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED) {
-						// Use fixed / precomputed "means" and "stds" instead of empirical values
-						for (int m = 0; m < means.rows; m++) {
-							means.at<float>(m, 0) = cfg.TRAIN.BBOX_NORMALIZE_MEANS[0];
-							means.at<float>(m, 1) = cfg.TRAIN.BBOX_NORMALIZE_MEANS[1];
-							means.at<float>(m, 2) = cfg.TRAIN.BBOX_NORMALIZE_MEANS[2];
-							means.at<float>(m, 3) = cfg.TRAIN.BBOX_NORMALIZE_MEANS[3];
-							stds.at<float>(m, 0) = cfg.TRAIN.BBOX_NORMALIZE_STDS[0];
-							stds.at<float>(m, 1) = cfg.TRAIN.BBOX_NORMALIZE_STDS[1];
-							stds.at<float>(m, 2) = cfg.TRAIN.BBOX_NORMALIZE_STDS[2];
-							stds.at<float>(m, 3) = cfg.TRAIN.BBOX_NORMALIZE_STDS[3];
-						}
-					}
-					else {
-						// Compute values needed for means and stds
-						// var(x) = E(x ^ 2) - E(x) ^ 2
-						Mat class_counts(_num_classes, 1, CV_32F, Scalar(0));
-						class_counts += Scalar(cfg.EPS);
-						Mat sums(_num_classes, 4, CV_32F, Scalar(0));
-						Mat squared_sums(_num_classes, 4, CV_32F, Scalar(0));
-
-						
-						for (int m = 0; m < _num_classes; m++) {
-							vector<int> cls_inds;
-							Mat cls_vals;
-							for (int n = 0; n < bbox_targets.rows; n++) {
-								if (bbox_targets.at<int>(n, 0) == m) {
-									cls_inds.push_back(m);
-									Mat tmp(1, 4, CV_32F);
-									tmp.at<float>(0, 0) = bbox_targets.at<float>(n, 1);
-									tmp.at<float>(0, 1) = bbox_targets.at<float>(n, 2);
-									tmp.at<float>(0, 2) = bbox_targets.at<float>(n, 3);
-									tmp.at<float>(0, 3) = bbox_targets.at<float>(n, 4);
-									cls_vals.push_back(tmp.clone());
-								}
-							}
-							if (cls_inds.size() > 0) {
-								class_counts.at<float>(m, 0) += cls_inds.size();
-								vector<float> tmp_sums;
-								vector<float> tmp_pow_sums;
-								for (int n = 0; n < cls_vals.cols; n++) {
-									float tmp = 0;
-									float pow_tmp = 0;
-									for (int x = 0; x < cls_vals.rows; x++) {
-										tmp += cls_vals.at<float>(x, n);
-										pow_tmp += pow(cls_vals.at<float>(x, n), 2);
-									}
-									tmp_sums.push_back(tmp);
-									tmp_pow_sums.push_back(pow_tmp);
-								}
-								for (int n = 0; n < sums.cols; n++) {
-									sums.at<float>(m, n) = tmp_sums[n];
-									squared_sums.at<float>(m, n) = tmp_pow_sums[n];
-								}
-							}
-
-							for (int n = 0; n < means.cols; n++) {
-								means.at<float>(m, n) = sums.at<float>(m, n) / class_counts.at<float>(m, n);
-								stds.at<float>(m, n) = pow((squared_sums.at<float>(m, n) / class_counts.at<float>(m, n) - pow(means.at<float>(m, n), 2)), 0.5);
-							}
-
-						}
-
-					}
-					// Normalize targets
-					if (cfg.TRAIN.BBOX_NORMALIZE_TARGETS) {
-						for (int m = 0; m < _num_classes; m++) {
-							for (int n = 0; n < bbox_targets.rows; n++) {
-								if (bbox_targets.at<int>(n, 0) == m) {
-									//cls_inds.push_back(m);
-									bbox_targets.at<float>(n, 1) -= means.at<float>(m, 0);
-									bbox_targets.at<float>(n, 2) -= means.at<float>(m, 1);
-									bbox_targets.at<float>(n, 3) -= means.at<float>(m, 2);
-									bbox_targets.at<float>(n, 4) -= means.at<float>(m, 3);
-									bbox_targets.at<float>(n, 1) /= stds.at<float>(m, 0);
-									bbox_targets.at<float>(n, 2) /= stds.at<float>(m, 1);
-									bbox_targets.at<float>(n, 3) /= stds.at<float>(m, 2);
-									bbox_targets.at<float>(n, 4) /= stds.at<float>(m, 3);
-								}
-							}
-							
-						}
-					}
-
-					oneImageData.bbox_targets = bbox_targets;
-				}
-
-			}
-			
-			oneImageData.gt_overlaps = tmp_gt_overlaps;
-			oneImageData.xmlInfo = tmpXmlInfo;
-			_map_data.insert(make_pair(tmpImagePath, oneImageData));
+		vector<BBox> gt_boxes;
+		for (int m = 0; m < tmpXmlInfo.size(); m++) {
+			BBox tmp;
+			tmp.xmin = tmpXmlInfo[m].xmin;
+			tmp.ymin = tmpXmlInfo[m].ymin;
+			tmp.xmax = tmpXmlInfo[m].xmax;
+			tmp.ymax = tmpXmlInfo[m].ymax;
+			gt_boxes.push_back(tmp);
 		}
 
+		roi oneImageData;
+		vector<vector<float>> tmp_gt_overlaps;
+		if (cfg.TRAIN.HAS_RPN) {
+			vector<string>::iterator it;
+			for (int m = 0; m < tmpXmlInfo.size(); m++) {
+				vector<float> tmp_gt_overlap(_num_classes, 0.0f);
+
+				int classId = g_labelmap[tmpXmlInfo[m].slabel];
+				tmp_gt_overlap[classId] = 1.0;
+				tmp_gt_overlaps.push_back(tmp_gt_overlap);
+			}
+		}
+		else {
+			_map_data.clear();
+
+			vector<vector<float>> gt_overlaps_matrix = bbox_overlaps(gt_boxes, rpn_generate_bbox[tmpImagePath]);
+			vector<int> maxes;
+			vector<int> max_classes;
+			for (int m = 0; m < gt_overlaps_matrix.size(); m++) {
+				vector<float> tmp_gt_overlap(_num_classes, 0.0f);
+				vector<float>::iterator biggest = max_element(begin(gt_overlaps_matrix[m]), end(gt_overlaps_matrix[m]));
+					
+				int num_gt_box = distance(begin(gt_overlaps_matrix[m]), biggest);
+
+				int classId = g_labelmap[tmpXmlInfo[num_gt_box].slabel];
+					
+				tmp_gt_overlap[classId] = *biggest;
+				tmp_gt_overlaps.push_back(tmp_gt_overlap);
+				max_classes.push_back(classId);
+				maxes.push_back(*biggest);
+			}
+			oneImageData.max_classes = max_classes;
+			oneImageData.max_overlaps = maxes;
+			oneImageData.boxes = rpn_generate_bbox[tmpImagePath];
+
+			vector<BBox> rois = rpn_generate_bbox[tmpImagePath];
+			if (cfg.TRAIN.BBOX_REG) {
+				Mat bbox_targets(rois.size(), 5, CV_32F, Scalar(0));
+				vector<int> gt_inds;
+				vector<BBox> gt_inds_boxes;
+				vector<int> ex_inds;
+				Mat ex_rois;
+				for (int m = 0; m < maxes.size(); m++) {
+					if (maxes[m] == 1) {
+						gt_inds.push_back(m);
+						gt_inds_boxes.push_back(rois[m]);
+					}
+							
+					if (maxes[m] >= cfg.TRAIN.BBOX_THRESH) {
+						ex_inds.push_back(m);
+						vector<float> vec_rois = { rois[m].xmin, rois[m].ymin, rois[m].xmax, rois[m].ymax };
+						ex_rois.push_back(Mat(1, vec_rois.size(), CV_32F, vec_rois.data()));
+					}
+				}
+
+				if (gt_inds.size() != 0) {
+					vector<vector<float>> ex_gt_overlaps = bbox_overlaps(ex_rois, gt_inds_boxes);
+
+					//vector<float> gt_assignment;
+					Mat gt_rois;
+					for (int m = 0; m < ex_gt_overlaps.size(); m++) {
+						vector<float>::iterator biggest = max_element(begin(ex_gt_overlaps[m]), end(ex_gt_overlaps[m]));
+
+						int gt_assignment = distance(ex_gt_overlaps[m].begin(), biggest);
+						//gt_assignment.push_back(distance(begin(ex_gt_overlaps[m], biggest)));
+						BBox tmp = rois[gt_inds[gt_assignment]];
+						vector<float> vec_tmp = { tmp.xmin, tmp.ymin, tmp.xmax, tmp.ymax };
+
+						gt_rois.push_back(Mat(1, vec_tmp.size(), CV_32F, vec_tmp.data()));
+					}
+
+					Mat bbox_transform_mat = bbox_transform(ex_rois, gt_rois);
+
+					for (int m = 0; m < ex_inds.size(); m++) {
+						bbox_targets.at<float>(ex_inds[m], 0) = max_classes[ex_inds[m]];
+						bbox_targets.at<float>(ex_inds[m], 1) = bbox_transform_mat.at<float>(m, 0);
+						bbox_targets.at<float>(ex_inds[m], 2) = bbox_transform_mat.at<float>(m, 1);
+						bbox_targets.at<float>(ex_inds[m], 3) = bbox_transform_mat.at<float>(m, 2);
+						bbox_targets.at<float>(ex_inds[m], 4) = bbox_transform_mat.at<float>(m, 3);
+					}
+				}
+					
+				Mat means(_num_classes, 4, CV_32F);
+				Mat stds(_num_classes, 4, CV_32F);
+				if (cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED) {
+					// Use fixed / precomputed "means" and "stds" instead of empirical values
+					for (int m = 0; m < means.rows; m++) {
+						means.at<float>(m, 0) = cfg.TRAIN.BBOX_NORMALIZE_MEANS[0];
+						means.at<float>(m, 1) = cfg.TRAIN.BBOX_NORMALIZE_MEANS[1];
+						means.at<float>(m, 2) = cfg.TRAIN.BBOX_NORMALIZE_MEANS[2];
+						means.at<float>(m, 3) = cfg.TRAIN.BBOX_NORMALIZE_MEANS[3];
+						stds.at<float>(m, 0) = cfg.TRAIN.BBOX_NORMALIZE_STDS[0];
+						stds.at<float>(m, 1) = cfg.TRAIN.BBOX_NORMALIZE_STDS[1];
+						stds.at<float>(m, 2) = cfg.TRAIN.BBOX_NORMALIZE_STDS[2];
+						stds.at<float>(m, 3) = cfg.TRAIN.BBOX_NORMALIZE_STDS[3];
+					}
+				}
+				else {
+					// Compute values needed for means and stds
+					// var(x) = E(x ^ 2) - E(x) ^ 2
+					Mat class_counts(_num_classes, 1, CV_32F, Scalar(0));
+					class_counts += Scalar(cfg.EPS);
+					Mat sums(_num_classes, 4, CV_32F, Scalar(0));
+					Mat squared_sums(_num_classes, 4, CV_32F, Scalar(0));
+
+						
+					for (int m = 0; m < _num_classes; m++) {
+						vector<int> cls_inds;
+						Mat cls_vals;
+						for (int n = 0; n < bbox_targets.rows; n++) {
+							if (bbox_targets.at<int>(n, 0) == m) {
+								cls_inds.push_back(m);
+								Mat tmp(1, 4, CV_32F);
+								tmp.at<float>(0, 0) = bbox_targets.at<float>(n, 1);
+								tmp.at<float>(0, 1) = bbox_targets.at<float>(n, 2);
+								tmp.at<float>(0, 2) = bbox_targets.at<float>(n, 3);
+								tmp.at<float>(0, 3) = bbox_targets.at<float>(n, 4);
+								cls_vals.push_back(tmp.clone());
+							}
+						}
+						if (cls_inds.size() > 0) {
+							class_counts.at<float>(m, 0) += cls_inds.size();
+							vector<float> tmp_sums;
+							vector<float> tmp_pow_sums;
+							for (int n = 0; n < cls_vals.cols; n++) {
+								float tmp = 0;
+								float pow_tmp = 0;
+								for (int x = 0; x < cls_vals.rows; x++) {
+									tmp += cls_vals.at<float>(x, n);
+									pow_tmp += pow(cls_vals.at<float>(x, n), 2);
+								}
+								tmp_sums.push_back(tmp);
+								tmp_pow_sums.push_back(pow_tmp);
+							}
+							for (int n = 0; n < sums.cols; n++) {
+								sums.at<float>(m, n) = tmp_sums[n];
+								squared_sums.at<float>(m, n) = tmp_pow_sums[n];
+							}
+						}
+
+						for (int n = 0; n < means.cols; n++) {
+							means.at<float>(m, n) = sums.at<float>(m, n) / class_counts.at<float>(m, n);
+							stds.at<float>(m, n) = pow((squared_sums.at<float>(m, n) / class_counts.at<float>(m, n) - pow(means.at<float>(m, n), 2)), 0.5);
+						}
+
+					}
+
+				}
+				// Normalize targets
+				if (cfg.TRAIN.BBOX_NORMALIZE_TARGETS) {
+					for (int m = 0; m < _num_classes; m++) {
+						for (int n = 0; n < bbox_targets.rows; n++) {
+							if (bbox_targets.at<int>(n, 0) == m) {
+								//cls_inds.push_back(m);
+								bbox_targets.at<float>(n, 1) -= means.at<float>(m, 0);
+								bbox_targets.at<float>(n, 2) -= means.at<float>(m, 1);
+								bbox_targets.at<float>(n, 3) -= means.at<float>(m, 2);
+								bbox_targets.at<float>(n, 4) -= means.at<float>(m, 3);
+								bbox_targets.at<float>(n, 1) /= stds.at<float>(m, 0);
+								bbox_targets.at<float>(n, 2) /= stds.at<float>(m, 1);
+								bbox_targets.at<float>(n, 3) /= stds.at<float>(m, 2);
+								bbox_targets.at<float>(n, 4) /= stds.at<float>(m, 3);
+							}
+						}
+							
+					}
+				}
+
+				oneImageData.bbox_targets = bbox_targets;
+			}
+
+		}
+			
+		oneImageData.gt_overlaps = tmp_gt_overlaps;
+		oneImageData.xmlInfo = tmpXmlInfo;
+		_map_data.insert(make_pair(tmpImagePath, oneImageData));
 	}
 	random_shuffle(_vecImageName.begin(), _vecImageName.end());
 	
 }
 
-void RoiDataLayer::loadBatch(Blob** top, int numTop) {
+void RoIDataLayer::loadBatch(Blob** top, int numTop) {
 	Blob* image = top[0];
-
-
-	//
-	//float* gt_boxes_ptr = gt_boxes->mutable_cpu_data();
+	Blob* raw_image = top[3];
+	int max_height = 0;
+	int max_width = 0;
 
 	int batch_size = image->num();
+
+	vector<Mat> input_images;
+	vector<Mat> raw_images;
 	for (int i = 0; i < batch_size; i++) {
 		string imageName = _vecImageName[_cursor];
 		Mat im = imread(imageName);
@@ -266,23 +265,31 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 		float im_size_max = max(im.rows, im.cols);
 		float im_scale = cfg.TRAIN.MIN_SIZE / im_size_min;
 
-		if (cvRound(im_scale * im_size_max) > cfg.TRAIN.MAX_SIZE)
+		if (round(im_scale * im_size_max) > cfg.TRAIN.MAX_SIZE)
 			im_scale = cfg.TRAIN.MAX_SIZE / im_size_max;
 
 		resize(im, im, Size(), im_scale, im_scale, CV_INTER_LINEAR);
 
+		max_height = max(max_height, im.rows);
+		max_width = max(max_width, im.cols);
+
 		im.convertTo(im, CV_32F);
-		im -= this->means;
-		image->setData(i, im);
+		Mat raw_im;
+		im.copyTo(raw_im);
+		raw_images.push_back(raw_im);
+
+		im -= cfg.PIXEL_MEANS;
+		
+		input_images.push_back(im);
 
 		if (cfg.TRAIN.HAS_RPN) {
 			Blob* im_info = top[1];
 			Blob* gt_boxes = top[2];
 			float* im_info_ptr = im_info->mutable_cpu_data();
 			gt_boxes->reshape(_map_data[imageName].xmlInfo.size(), 5, 1, 1);
-			Mat blob(_map_data[imageName].xmlInfo.size(), 5, CV_32F, top[2]->mutable_cpu_data());
+			Mat gt_boxes_mat(_map_data[imageName].xmlInfo.size(), 5, CV_32F, top[2]->mutable_cpu_data());
 			for (int j = 0; j < _map_data[imageName].xmlInfo.size(); j++) {
-				float* gt_boxes_ptr = blob.ptr<float>(j);
+				float* gt_boxes_ptr = gt_boxes_mat.ptr<float>(j);
 				gt_boxes_ptr[0] = _map_data[imageName].xmlInfo[j].xmin * im_scale;
 				gt_boxes_ptr[1] = _map_data[imageName].xmlInfo[j].ymin * im_scale;
 				gt_boxes_ptr[2] = _map_data[imageName].xmlInfo[j].xmax * im_scale;
@@ -296,7 +303,6 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 			im_info_ptr[1] = im.cols;
 			im_info_ptr[2] = im_scale;
 			//im_info_ptr += im_info->count();
-			this->_cursor++;
 		}
 		else {
 			Blob* rois_blob = top[1];
@@ -425,23 +431,52 @@ void RoiDataLayer::loadBatch(Blob** top, int numTop) {
 			
 		}
 
-		if (this->_cursor == this->_vecImageName.size())
-		{
+		this->_cursor++;
+		if (this->_cursor == this->_vecImageName.size()) {
 			this->_cursor = 0;
+			std::random_shuffle(_vecImageName.begin(), _vecImageName.end());
 		}
 
 	}
+
+	image->reshape(cfg.TRAIN.IMS_PER_BATCH, 3, max_height, max_width);
+	raw_image->reshape(cfg.TRAIN.IMS_PER_BATCH, 3, max_height, max_width);
+	float* raw_image_ptr = raw_image->mutable_cpu_data();
+	float* image_ptr = image->mutable_cpu_data();
+	caffe_set(image->count(), 0.0f, image_ptr);
+	caffe_set(raw_image->count(), 0.0f, raw_image_ptr);
+	for (int i = 0; i < input_images.size(); ++i) {
+		Mat im = input_images[i];
+		Mat raw_im = raw_images[i];
+		vector<Mat> ms;
+		split(im, ms);
+		vector<Mat> raw_ms;
+		split(raw_im, raw_ms);
+		// 假如是比最大尺寸小的图就放在左上角，其他地方置0
+		for (int j = 0; j < ms.size(); ++j) {
+			for (int h = 0; h < ms[j].rows; ++h) {
+				for (int w = 0; w < ms[j].cols; ++w) {
+					int index = h * image->width() + w;
+					image_ptr[index] = ms[j].at<float>(h, w);
+					raw_image_ptr[index] = raw_ms[j].at<float>(h, w);
+				}
+			}
+			image_ptr += image->width() * image->height();
+			raw_image_ptr += image->width() * image->height();
+		}
+	}
+
 }
 
 
-void RoiDataLayer::forward(Blob** bottom, int numBottom, Blob** top, int numTop) {
+void RoIDataLayer::forward(Blob** bottom, int numBottom, Blob** top, int numTop) {
 	loadBatch(top, numTop);
 }
 
-void RoiDataLayer::backward(Blob** bottom, int numBottom, Blob** top, int numTop, const bool* propagate_down) {
+void RoIDataLayer::backward(Blob** bottom, int numBottom, Blob** top, int numTop, const bool* propagate_down) {
 
 }
 
-void RoiDataLayer::reshape(Blob** bottom, int numBottom, Blob** top, int numTop) {
+void RoIDataLayer::reshape(Blob** bottom, int numBottom, Blob** top, int numTop) {
 
 }

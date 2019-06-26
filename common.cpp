@@ -12,21 +12,18 @@ int randr(int mi, int mx){
 	return rand() % r + mi;
 }
 
-vector<vector<float>> bbox_overlaps(vector<BBox> gt_boxes, vector<BBox> boxes) {
+vector<vector<float>> bbox_overlaps(vector<BBox> boxes, vector<BBox> query_boxes) {
 	unsigned int N = boxes.size();
-	unsigned int K = gt_boxes.size();
+	unsigned int K = query_boxes.size();
 	vector<vector<float>> overlaps(N, vector<float>(K, 0));
-	float iw, ih, box_area;
-	float ua;
-	unsigned int n, k;
-	for (int k = 0; k < K; k++) {
-		box_area = (gt_boxes[k].xmax - gt_boxes[k].xmin + 1) * (gt_boxes[k].ymax - gt_boxes[k].ymin + 1);
-		for (int n = 0; n < N; n++) {
-			iw = (min(boxes[n].xmax, gt_boxes[k].xmax) - max(boxes[n].xmin, gt_boxes[k].xmin) + 1);
+	for (int k = 0; k < K; ++k) {
+		float box_area = (query_boxes[k].xmax - query_boxes[k].xmin + 1) * (query_boxes[k].ymax - query_boxes[k].ymin + 1);
+		for (int n = 0; n < N; ++n) {
+			float iw = (min(boxes[n].xmax, query_boxes[k].xmax) - max(boxes[n].xmin, query_boxes[k].xmin) + 1);
 			if (iw > 0) {
-				ih = (min(boxes[n].ymax, gt_boxes[k].ymax) - max(boxes[n].ymin, gt_boxes[k].ymin) + 1);
+				float ih = (min(boxes[n].ymax, query_boxes[k].ymax) - max(boxes[n].ymin, query_boxes[k].ymin) + 1);
 				if (ih > 0) {
-					ua = (boxes[n].xmax - boxes[n].xmin + 1) * (boxes[n].ymax - boxes[n].ymin + 1) + box_area - iw * ih;
+					float ua = (boxes[n].xmax - boxes[n].xmin + 1) * (boxes[n].ymax - boxes[n].ymin + 1) + box_area - iw * ih;
 					overlaps[n][k] = iw * ih / ua;
 				}
 
@@ -179,35 +176,39 @@ Mat bbox_transform_inv(Mat boxes, Mat deltas){
 	Mat ctr_x = boxescopy.col(0) + 0.5 * widths;
 	Mat ctr_y = boxescopy.col(1) + 0.5 * heights;
 
-	Mat dx = cpdeltas.col(0);
-	Mat dy = cpdeltas.col(1);
-	Mat dw = cpdeltas.col(2);
-	Mat dh = cpdeltas.col(3);
 
-	Mat pred_ctr_x = dx.mul(widths) + ctr_x;
-	Mat pred_ctr_y = dy.mul(heights) + ctr_y;
-	cv::exp(dw, dw);
-	cv::exp(dh, dh);
+	Mat predboxes(boxescopy.rows, cpdeltas.cols, CV_32F);
+	for (int i = 0; i < cpdeltas.cols; i += 4) {
+		Mat dx = cpdeltas.col(i);
+		Mat dy = cpdeltas.col(i + 1);
+		Mat dw = cpdeltas.col(i + 2);
+		Mat dh = cpdeltas.col(i + 3);
 
-	Mat pred_w = dw.mul(widths);
-	Mat pred_h = dh.mul(heights);
+		Mat pred_ctr_x = dx.mul(widths) + ctr_x;
+		Mat pred_ctr_y = dy.mul(heights) + ctr_y;
+		cv::exp(dw, dw);
+		cv::exp(dh, dh);
 
-	Mat predboxes(boxescopy.rows, 4, CV_32F);
-	predboxes.col(0) = pred_ctr_x - 0.5 * pred_w;
-	predboxes.col(1) = pred_ctr_y - 0.5 * pred_h;
-	predboxes.col(2) = pred_ctr_x + 0.5 * pred_w;
-	predboxes.col(3) = pred_ctr_y + 0.5 * pred_h;
+		Mat pred_w = dw.mul(widths);
+		Mat pred_h = dh.mul(heights);
+		
+		predboxes.col(i) = pred_ctr_x - 0.5 * pred_w;
+		predboxes.col(i + 1) = pred_ctr_y - 0.5 * pred_h;
+		predboxes.col(i + 2) = pred_ctr_x + 0.5 * pred_w;
+		predboxes.col(i + 3) = pred_ctr_y + 0.5 * pred_h;
+	}
 	return predboxes;
 }
 
 Mat clip_boxes(Mat boxes, int height, int width){
 
 	Mat out = boxes.clone();
-	out.col(0) = (cv::max)((cv::min)(boxes.col(0), width - 1), 0);
-	out.col(1) = (cv::max)((cv::min)(boxes.col(1), height - 1), 0);
-	out.col(2) = (cv::max)((cv::min)(boxes.col(2), width - 1), 0);
-	out.col(3) = (cv::max)((cv::min)(boxes.col(3), height - 1), 0);
-
+	for (int i = 0; i < boxes.cols; i += 4) {
+		out.col(i) = (cv::max)((cv::min)(boxes.col(i), width - 1), 0);
+		out.col(i + 1) = (cv::max)((cv::min)(boxes.col(i + 1), height - 1), 0);
+		out.col(i + 2) = (cv::max)((cv::min)(boxes.col(i + 2), width - 1), 0);
+		out.col(i + 3) = (cv::max)((cv::min)(boxes.col(i + 3), height - 1), 0);
+	}
 	return out;
 }
 
@@ -254,6 +255,57 @@ vector<BBox> nms(vector<BBox>& objs, float nmsThreshold, vector<int>& keepinds, 
 	return out;
 }
 
+cv::Scalar HSV2RGB(const float h, const float s, const float v) {
+	const int h_i = static_cast<int>(h * 6);
+	const float f = h * 6 - h_i;
+	const float p = v * (1 - s);
+	const float q = v * (1 - f*s);
+	const float t = v * (1 - (1 - f) * s);
+	float r, g, b;
+	switch (h_i) {
+	case 0:
+		r = v; g = t; b = p;
+		break;
+	case 1:
+		r = q; g = v; b = p;
+		break;
+	case 2:
+		r = p; g = v; b = t;
+		break;
+	case 3:
+		r = p; g = q; b = v;
+		break;
+	case 4:
+		r = t; g = p; b = v;
+		break;
+	case 5:
+		r = v; g = p; b = q;
+		break;
+	default:
+		r = 1; g = 1; b = 1;
+		break;
+	}
+	return cv::Scalar(r * 255, g * 255, b * 255);
+}
+
+vector<cv::Scalar> GetColors(const int n) {
+	vector<cv::Scalar> colors;
+	for (int i = 0; i < n; ++i) {
+		const float h = i / (float)n;
+		colors.push_back(HSV2RGB(h, 1, 1));
+	}
+	return colors;
+}
+
+Scalar getColor(int label){
+	static vector<Scalar> colors;
+	if (colors.size() == 0){
+		colors = GetColors(20);
+		colors.insert(colors.begin(), Scalar::all(255));
+	}
+	return colors[label % colors.size()];
+}
+
 map<string, vector<BBox>> rpn_generate_bbox;
 
 map<string, int> g_labelmap = {
@@ -279,3 +331,6 @@ map<string, int> g_labelmap = {
 	{ "train", 19 },
 	{ "tvmonitor", 20 }
 };
+
+vector<string> labelmap = { "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
+"pottedplant", "sheep", "sofa", "train", "tvmonitor" };

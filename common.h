@@ -4,6 +4,7 @@
 #include <highgui.h>
 #include <cc_v5.h>
 #include <pa_file/pa_file.h>
+#include <stdio.h>
 #include <math.h>
 #include <vector>
 #include <iostream>
@@ -28,6 +29,8 @@ enum NMS_TYPE{
 
 struct configure{
 	string datapath;
+	string xmlpath;
+	int num_classes;
 };
 
 struct BBox{
@@ -77,15 +80,17 @@ vector<BBox> nms(vector<BBox>& objs, float nmsThreshold, vector<int>& keepinds =
 
 void caffe_set(int count, float val, float* ptr);
 
+Scalar getColor(int label);
+
 struct ConfigTrain{
 	//anchor target layer
-	const int IMS_PER_BATCH = 1;
+	int IMS_PER_BATCH = 1;
 	const int SCALES = 600;
 	const bool RPN_CLOBBER_POSITIVES = false;
 	const float RPN_FG_FRACTION = 0.5;
-	const int RPN_BATCHSIZE = 256;
+	int RPN_BATCHSIZE = 256;
 	const float RPN_NEGATIVE_OVERLAP = 0.3;//
-	const float RPN_POSITIVE_OVERLAP = 0.7;
+	float RPN_POSITIVE_OVERLAP = 0.7;
 	vector<float> RPN_BBOX_INSIDE_WEIGHTS; // inside ШЈжи
 	const float RPN_POSITIVE_WEIGHT = -1.0;
 
@@ -97,7 +102,7 @@ struct ConfigTrain{
 
 	const float FG_THRESH = 0.5;
 	const float BG_THRESH_HI = 0.5;
-	const float BG_THRESH_LO = 0.1;
+	float BG_THRESH_LO = 0.1;
 	const float BBOX_THRESH = 0.5;
 
 	bool HAS_RPN = true;
@@ -110,7 +115,12 @@ struct ConfigTrain{
 	const float RPN_NMS_THRESH = 0.7;
 	const int RPN_MIN_SIZE = 16;
 
-	const bool BBOX_NORMALIZE_TARGETS_PRECOMPUTED = false;
+	int SNAPSHOT_ITERS = 2000;
+	string SNAPSHOT_PREFIX = "train_model/vgg16_faster_rcnn";
+	string PARAM_SNAPSHOT_PREFIX = "train_model/param_vgg16_faster_rcnn";
+
+
+	bool BBOX_NORMALIZE_TARGETS_PRECOMPUTED = false;
 	const bool BBOX_NORMALIZE_TARGETS = true;
 
 	vector<float> BBOX_NORMALIZE_MEANS;
@@ -130,13 +140,22 @@ struct ConfigTest{
 	const int RPN_POST_NMS_TOP_N = 300;
 	const float RPN_NMS_THRESH = 0.7;
 	const int RPN_MIN_SIZE = 16;
+	const int SCALES = 600;
+	const int MAX_SIZE = 1000;
+
+	bool HAS_RPN = true;
+	bool BBOX_REG = true;
+
+	float NMS = 0.3;
 };
 
 static struct Config{
 	float EPS = 1e-14;
+	Scalar PIXEL_MEANS = Scalar(102.9801, 115.9465, 122.7717);
 	ConfigTrain TRAIN;
 	ConfigTest TEST;
 }cfg;
 
 extern map<string, vector<BBox>> rpn_generate_bbox;
 extern map<string, int> g_labelmap;
+extern vector<string> labelmap;

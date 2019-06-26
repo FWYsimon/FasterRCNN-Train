@@ -1,18 +1,442 @@
 #include "common.h"
+#include "visualize.h"
 
 #include "ProposalTargetLayer.h"
 #include "ProposalLayer.h"
 #include "AnchorTargetLayer.h"
 #include "RoiDataLayer.h"
 
+class WatchLayer : public BaseLayer {
+public:
+	SETUP_LAYERFUNC(WatchLayer);
+
+	virtual void setup(const char* name, const char* type, const char* param_str, int phase, Blob** bottom, int numBottom, Blob** top, int numTop) {
+	}
+
+	virtual void forward(Blob** bottom, int numBottom, Blob** top, int numTop) {
+		Blob* raw_image = bottom[0];
+		Blob* im_info = bottom[1];
+		Blob* rois = bottom[2];
+		Blob* cls_score = bottom[3];
+
+		float* cls_score_ptr = cls_score->mutable_cpu_data();
+		float* back = cls_score_ptr;
+
+		Mat scores(cls_score->num(), cls_score->channel(), CV_32F, back);
+
+		int height = im_info->mutable_cpu_data()[0];
+		int width = im_info->mutable_cpu_data()[1];
+		float im_scale = im_info->mutable_cpu_data()[2];
+
+		vector<Mat> ms;
+		for (int i = 0; i < raw_image->channel(); ++i) {
+			ms.push_back(Mat(height, width, CV_32FC1, raw_image->mutable_cpu_data() + raw_image->count(2) * i));
+		}
+		//Mat im(im_info->mutable_cpu_data()[0], im_info->mutable_cpu_data()[1], CV_8UC3, raw_image->mutable_cpu_data());
+		Mat im;
+		merge(ms, im);
+		im.convertTo(im, CV_8UC3);
+
+		resize(im, im, Size(), 1.0f / im_scale, 1.0f / im_scale);
+
+		const float* rois_ptr = rois->cpu_data();
+		Mat boxes;
+		for (int j = 0; j < rois->num(); ++j) {
+			Mat one_bbox(1, 4, CV_32F);
+			one_bbox.at<float>(0, 0) = rois_ptr[1] / im_scale;
+			one_bbox.at<float>(0, 1) = rois_ptr[2] / im_scale;
+			one_bbox.at<float>(0, 2) = rois_ptr[3] / im_scale;
+			one_bbox.at<float>(0, 3) = rois_ptr[4] / im_scale;
+
+			boxes.push_back(one_bbox);
+			rois_ptr += 5;
+		}
+
+		Blob* box_deltas = bottom[4];
+		Mat box_deltas_mat(box_deltas->num(), box_deltas->channel(), CV_32F, box_deltas->mutable_cpu_data());
+		Mat pred_boxes = bbox_transform_inv(boxes, box_deltas_mat);
+		Mat out = clip_boxes(pred_boxes, im.rows, im.cols);
+
+		vector<BBox> all_boxes;
+		for (int j = 1; j < config.num_classes; ++j) {
+			vector<BBox> cls_dets;
+			vector<int> keep_inds;
+			for (int k = 0; k < scores.rows; ++k) {
+				if (scores.at<float>(k, j) > 0.1) {
+					BBox bbox;
+					bbox.score = scores.at<float>(k, j);
+					bbox.xmin = out.at<float>(k, j * 4);
+					bbox.ymin = out.at<float>(k, j * 4 + 1);
+					bbox.xmax = out.at<float>(k, j * 4 + 2);
+					bbox.ymax = out.at<float>(k, j * 4 + 3);
+					bbox.label = j;
+
+					cls_dets.push_back(bbox);
+				}
+			}
+
+			cls_dets = nms(cls_dets, cfg.TEST.NMS, keep_inds, MIN);
+			all_boxes.insert(all_boxes.end(), cls_dets.begin(), cls_dets.end());
+		}
+
+		for (int j = 0; j < all_boxes.size(); ++j) {
+			rectangle(im, Rect(all_boxes[j].xmin, all_boxes[j].ymin, all_boxes[j].xmax - all_boxes[j].xmin, all_boxes[j].ymax - all_boxes[j].ymin), getColor(all_boxes[j].label), 1);
+			putText(im, labelmap[all_boxes[j].label], Point2f(all_boxes[j].xmin, all_boxes[j].ymin), 1, 1, getColor(all_boxes[j].label), 1);
+		}
+		postMatrix(im, "image");
+	}
+
+	virtual void backward(Blob** bottom, int numBottom, Blob** top, int numTop, const bool* propagate_down) {
+	}
+
+	virtual void reshape(Blob** bottom, int numBottom, Blob** top, int numTop) {
+
+	}
+};
+
+void train_rpn(string solver_path, string pretrain_model) {
+	config.datapath = "data/VOCtrainval_06-Nov-2007/VOCdevkit/VOC2007/JPEGImages";
+	config.xmlpath = "data/VOCtrainval_06-Nov-2007/VOCdevkit/VOC2007/Annotations";
+
+	cfg.TRAIN.HAS_RPN = true;
+	cfg.TRAIN.BBOX_REG = false;
+	cfg.TRAIN.IMS_PER_BATCH = 1;
+
+	shared_ptr<Solver> solver = loadSolverFromPrototxt(solver_path.c_str());
+
+	setSolver(solver.get());
+
+	solver->net()->weightsFromFile(pretrain_model.c_str());
+	solver->solve();
+}
+
+void rpn_generate(string deploy, string model) {
+	shared_ptr<Net> net = loadNetFromPrototxt(deploy.c_str());
+	net->weightsFromFile(model.c_str());
+
+	rpn_generate_bbox.clear();
+
+	config.datapath = "data/VOCtest_06-Nov-2007/VOCdevkit/VOC2007/JPEGImages";
+
+	PaVfiles vfs;
+	paFindFiles(config.datapath.c_str(), vfs, "*", false, true, PaFindFileType_File);
+	for (int i = 0; i < vfs.size(); ++i) {
+		Mat im = imread(vfs[i]);
+
+		Mat show;
+		im.copyTo(show);
+
+		im.convertTo(im, CV_32F);
+		im -= cfg.PIXEL_MEANS;
+		int im_size_min = min(im.cols, im.rows);
+		int im_size_max = max(im.cols, im.rows);
+
+		int target_size = cfg.TEST.SCALES;
+		float im_scale = float(target_size) / float(im_size_min);
+
+		if (round(im_scale * im_size_max) > cfg.TEST.MAX_SIZE)
+			im_scale = float(cfg.TEST.MAX_SIZE) / float(im_size_max);
+		
+		resize(im, im, Size(), im_scale, im_scale);
+
+		Blob* input = net->blob("data");
+		input->reshape(1, 3, im.rows, im.cols);
+		net->reshape();
+
+		Blob* im_info = net->blob("im_info");
+		
+		input->setData(0, im);
+		im_info->mutable_cpu_data()[0] = im.rows;
+		im_info->mutable_cpu_data()[1] = im.cols;
+		im_info->mutable_cpu_data()[2] = im_scale;
+
+		net->forward();
+
+		Blob* rois = net->blob("rois");
+		const float* rois_ptr = rois->cpu_data();
+		vector<BBox> one_image_bbox;
+		for (int j = 0; j < rois->num(); ++j) {
+			BBox bbox;
+			bbox.xmin = rois_ptr[1] / im_scale;
+			bbox.ymin = rois_ptr[2] / im_scale;
+			bbox.xmax = rois_ptr[3] / im_scale;
+			bbox.ymax = rois_ptr[4] / im_scale;
+
+			rectangle(show, Rect(bbox.xmin, bbox.ymin, bbox.xmax - bbox.xmin, bbox.ymax - bbox.ymin), Scalar(255, 255, 0), 2);
+
+			one_image_bbox.push_back(bbox);
+			rois_ptr += 5;
+		}
+
+		imshow("im", show);
+		waitKey(0);
+		//rpn_generate_bbox.insert(make_pair(vfs[i], one_image_bbox));
+	}
+}
+
+void train_fast_rcnn(string solver_path, string pretrain_model) {
+	cfg.TRAIN.HAS_RPN = false;
+	cfg.TRAIN.BBOX_REG = true;
+	cfg.TRAIN.IMS_PER_BATCH = 2;
+
+	shared_ptr<Solver> solver = loadSolverFromPrototxt(solver_path.c_str());
+	setSolver(solver.get());
+	
+	solver->net()->weightsFromFile(pretrain_model.c_str());
+	solver->solve();
+	
+}
+
+void train_end_to_end(string solver_path, string pretrain_model) {
+	config.datapath = "data/VOCtrainval_06-Nov-2007/VOCdevkit/VOC2007/JPEGImages";
+	config.xmlpath = "data/VOCtrainval_06-Nov-2007/VOCdevkit/VOC2007/Annotations";
+	config.num_classes = 21;
+
+	cfg.TRAIN.HAS_RPN = true;
+	cfg.TRAIN.BBOX_REG = true;
+	cfg.TRAIN.IMS_PER_BATCH = 1;
+	cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED = true;
+	cfg.TRAIN.RPN_POSITIVE_OVERLAP = 0.7;
+	cfg.TRAIN.BG_THRESH_LO = 0.0;
+
+	shared_ptr<Solver> solver = loadSolverFromPrototxt(solver_path.c_str());
+	setSolver(solver.get());
+	
+	solver->net()->weightsFromFile(pretrain_model.c_str());
+	
+	while (solver->iter() < solver->max_iter()) {
+		solver->step(1);
+
+		//snapshot
+		if (solver->iter() % cfg.TRAIN.SNAPSHOT_ITERS == 0) {
+			Net* net = solver->net();
+			bool scale_bbox_param = (cfg.TRAIN.BBOX_REG && cfg.TRAIN.BBOX_NORMALIZE_TARGETS);
+			Blob* orig_0 = net->layer("bbox_pred")->paramBlob(0);
+			Blob* orig_1 = net->layer("bbox_pred")->paramBlob(1);
+
+			Mat data_0(orig_0->num(), orig_1->channel(), CV_32F, orig_0->mutable_cpu_data());
+			Mat data_1(orig_1->num(), orig_1->channel(), CV_32F, orig_1->mutable_cpu_data());
+			Mat back_data_0, back_data_1;
+			data_0.copyTo(back_data_0);
+			data_1.copyTo(back_data_1);
+
+			if (scale_bbox_param) {
+				vector<float> means;
+				vector<float> stds;
+				for (int i = 0; i < config.num_classes; ++i) {
+					means.insert(means.end(), cfg.TRAIN.BBOX_NORMALIZE_MEANS.begin(), cfg.TRAIN.BBOX_NORMALIZE_MEANS.end());
+					stds.insert(stds.end(), cfg.TRAIN.BBOX_NORMALIZE_STDS.begin(), cfg.TRAIN.BBOX_NORMALIZE_STDS.end());
+				}
+
+				
+				for (int i = 0; i < data_0.rows; ++i)
+					data_0.row(i) = data_0.row(i) * stds[i];
+
+				for (int i = 0; i < data_1.rows; ++i)
+					data_1.row(i) = data_1.row(i) * stds[i] + means[i];
+			}
+
+			string filename = cfg.TRAIN.PARAM_SNAPSHOT_PREFIX + "_iter_" + format("%d", solver->iter()) + ".caffemodel";
+			net->saveToCaffemodel(filename.c_str());
+
+			if (scale_bbox_param) {
+				back_data_0.copyTo(data_0);
+				back_data_1.copyTo(data_1);
+			}
+			filename = cfg.TRAIN.SNAPSHOT_PREFIX + "_iter_" + format("%d", solver->iter()) + ".caffemodel";
+			solver->snapshot(filename.c_str(), true);
+		}
+	}
+
+	//solver->solve();
+}
+
+void faster_rcnn_end2end_test(string deploy, string pretrain_model) {
+	shared_ptr<Net> net = loadNetFromPrototxt(deploy.c_str());
+	net->weightsFromFile(pretrain_model.c_str());
+
+	config.datapath = "data/VOCtest_06-Nov-2007/VOCdevkit/VOC2007/JPEGImages";
+	config.num_classes = 21;
+	
+	PaVfiles vfs;
+	paFindFiles(config.datapath.c_str(), vfs, "*.jpg", false, true, PaFindFileType_File);
+	for (int i = 0; i < vfs.size(); ++i) {
+		Mat im = imread(vfs[i]);
+
+		Mat show;
+		im.copyTo(show);
+
+		im.convertTo(im, CV_32F);
+		im -= cfg.PIXEL_MEANS;
+		int im_size_min = min(im.cols, im.rows);
+		int im_size_max = max(im.cols, im.rows);
+
+		int target_size = cfg.TEST.SCALES;
+		float im_scale = float(target_size) / float(im_size_min);
+
+		if (round(im_scale * im_size_max) > cfg.TEST.MAX_SIZE)
+			im_scale = float(cfg.TEST.MAX_SIZE) / float(im_size_max);
+
+		resize(im, im, Size(), im_scale, im_scale);
+
+		Blob* input = net->blob("data");
+		input->reshape(1, 3, im.rows, im.cols);
+		net->reshape();
+
+		Blob* im_info = net->blob("im_info");
+
+		input->setData(0, im);
+		im_info->mutable_cpu_data()[0] = im.rows;
+		im_info->mutable_cpu_data()[1] = im.cols;
+		im_info->mutable_cpu_data()[2] = im_scale;
+
+		net->forward();
+
+		Blob* rois = net->blob("rois");
+		Blob* cls_prob = net->blob("cls_prob");
+
+		Mat scores(cls_prob->num(), cls_prob->channel(), CV_32F, cls_prob->mutable_cpu_data());
+		
+		float* rois_ptr = rois->mutable_cpu_data();
+		Mat boxes;
+		for (int j = 0; j < rois->num(); ++j) {
+			Mat one_bbox(1, 4, CV_32F);
+			one_bbox.at<float>(0, 0) = rois_ptr[1] / im_scale;
+			one_bbox.at<float>(0, 1) = rois_ptr[2] / im_scale;
+			one_bbox.at<float>(0, 2) = rois_ptr[3] / im_scale;
+			one_bbox.at<float>(0, 3) = rois_ptr[4] / im_scale;
+
+			boxes.push_back(one_bbox);
+			rois_ptr += 5;
+		}
+
+		Mat out;
+		if (cfg.TEST.BBOX_REG) {
+			Blob* box_deltas = net->blob("bbox_pred");
+			Mat box_deltas_mat(box_deltas->num(), box_deltas->channel(), CV_32F, box_deltas->mutable_cpu_data());
+			Mat pred_boxes = bbox_transform_inv(boxes, box_deltas_mat);
+			out = clip_boxes(pred_boxes, show.rows, show.cols);
+		}
+
+		vector<BBox> all_boxes;
+		for (int j = 1; j < config.num_classes; ++j) {
+			vector<BBox> cls_dets;
+			vector<int> keep_inds;
+			for (int k = 0; k < scores.rows; ++k) {
+				if (scores.at<float>(k, j) > 0.5) {
+					BBox bbox;
+					bbox.score = scores.at<float>(k, j);
+					bbox.xmin = out.at<float>(k, j * 4);
+					bbox.ymin = out.at<float>(k, j * 4 + 1);
+					bbox.xmax = out.at<float>(k, j * 4 + 2);
+					bbox.ymax = out.at<float>(k, j * 4 + 3);
+					bbox.label = j;
+
+					cls_dets.push_back(bbox);
+				}
+			}
+
+			vector<BBox> one_cls_res = nms(cls_dets, cfg.TEST.NMS, keep_inds, MIN);
+			all_boxes.insert(all_boxes.end(), one_cls_res.begin(), one_cls_res.end());
+		}
+
+		for (int j = 0; j < all_boxes.size(); ++j) {
+			rectangle(show, Rect(all_boxes[j].xmin, all_boxes[j].ymin, all_boxes[j].xmax - all_boxes[j].xmin, all_boxes[j].ymax - all_boxes[j].ymin), Scalar(255, 255, 0), 1);
+			putText(show, labelmap[all_boxes[j].label], Point2f(all_boxes[j].xmin, all_boxes[j].ymin), 1, 1, Scalar(255, 255, 0), 1);
+		}
+
+		imshow("im", show);
+		waitKey(0);
+	}
+}
+
 int main() {
+	
+	//vector<float> stds = { 0.2f, 0.2f, 0.4f, 0.4f };
+	//Mat stds_mat(4, 1, CV_32F, stds.data());
+	//float* data = new float[8];
+	//for (int i = 0; i < 8; ++i)
+	//	data[i] = i;
+
+
+
+	//vector<float> vec_data = vector<float>(data, data + 8);
+
+	//Mat a(4, 2, CV_32F, data);
+	//for (int i = 0; i < a.rows; ++i) {
+	//	a.row(i) = a.row(i) * stds[i];
+	//}
+
+	//for (int i = 0; i < 8; ++i)
+	//	cout << data[i] << endl;
+
+	//cout << "*************" << endl;
+
+	//data = vec_data.data();
+
+	//for (int i = 0; i < 8; ++i)
+	//	cout << data[i] << endl;
 
 	setGPU(0);
 	cc::installRegister();
 
+	INSTALL_LAYER(RoIDataLayer);
 	INSTALL_LAYER(ProposalTargetLayer);
 	INSTALL_LAYER(ProposalLayer);
 	INSTALL_LAYER(AnchorTargetLayer);
+	INSTALL_LAYER(WatchLayer);
+
+
+	/*config.num_classes = 21;
+	shared_ptr<Net> net = loadNetFromPrototxt("prototxt/faster_rcnn_end2end/test.prototxt");
+	net->weightsFromFile("pretrain_model/faster_rcnn_models/VGG16_faster_rcnn_final.caffemodel");
+
+	vector<float> data_orig_0;
+	vector<float> data_orig_1;
+	Blob* orig_0 = net->layer("bbox_pred")->paramBlob(0);
+	Blob* orig_1 = net->layer("bbox_pred")->paramBlob(1);
+
+	vector<float> means;
+	vector<float> stds;
+	for (int i = 0; i < config.num_classes; ++i) {
+		means.insert(means.end(), cfg.TRAIN.BBOX_NORMALIZE_MEANS.begin(), cfg.TRAIN.BBOX_NORMALIZE_MEANS.end());
+		stds.insert(stds.end(), cfg.TRAIN.BBOX_NORMALIZE_STDS.begin(), cfg.TRAIN.BBOX_NORMALIZE_STDS.end());
+	}
+
+	Mat data_0(orig_0->num(), orig_1->channel(), CV_32F, orig_0->mutable_cpu_data());
+	Mat data_1(orig_1->num(), orig_1->channel(), CV_32F, orig_1->mutable_cpu_data());
+	Mat back_data_0, back_data_1;
+	data_0.copyTo(back_data_0);
+	data_1.copyTo(back_data_1);
+	for (int i = 0; i < data_0.rows; ++i)
+		data_0.row(i) = data_0.row(i) * stds[i];
+
+	for (int i = 0; i < data_1.rows; ++i)
+		data_1.row(i) = data_1.row(i) * stds[i] + means[i];
+
+	string filename = cfg.TRAIN.SNAPSHOT_PREFIX + "_iter_" + format("%d", 0000) + ".caffemodel";
+	net->saveToCaffemodel(filename.c_str());
+
+	back_data_0.copyTo(data_0);
+	back_data_1.copyTo(data_1);
+
+	filename = cfg.TRAIN.SNAPSHOT_PREFIX + "_iter_" + format("%d", 0001) + ".caffemodel";
+	net->saveToCaffemodel(filename.c_str());*/
+
+	initializeVisualze();
+
+	/*string deploy = "prototxt/faster_rcnn_alt_opt/rpn_test.pt";
+	string model = "pretrain_model/faster_rcnn_models/VGG16_faster_rcnn_final.caffemodel";
+	rpn_generate(deploy, model);*/
+
+	//string deploy = "prototxt/faster_rcnn_end2end/test.prototxt";
+	//string model = "pretrain_model/faster_rcnn_models/VGG16_faster_rcnn_final.caffemodel";
+	//faster_rcnn_end2end_test(deploy, model);
+
+	string solver_path = "prototxt/faster_rcnn_end2end/solver.prototxt";
+	string model = "pretrain_model/imagenet_models/VGG16.v2.caffemodel";
+	train_end_to_end(solver_path, model);
+
 
 	//string deploy = "proposal_target.prototxt";
 	//shared_ptr<Net> net = loadNetFromPrototxt(deploy.c_str());
@@ -87,9 +511,7 @@ int main() {
 
 	Mat rpn_bbox_target_mat = Mat(rpn_bbox_targets->channel(), rpn_bbox_targets->height() * rpn_bbox_targets->width(), CV_32F, rpn_bbox_targets->mutable_cpu_data());*/
 
-
-
-
+	destoryVisualze();
 	return 0;
 }
 
