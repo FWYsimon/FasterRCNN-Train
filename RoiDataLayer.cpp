@@ -261,6 +261,16 @@ void RoIDataLayer::loadBatch(Blob** top, int numTop) {
 		string imageName = _vecImageName[_cursor];
 		Mat im = imread(imageName);
 
+		//Ëæ»ú·­×ª
+		int aug = randr(0, 1);
+		if (aug)
+			augmentation_flip(im, _map_data[imageName].xmlInfo);
+
+		//for (int i = 0; i < _map_data[imageName].xmlInfo.size(); ++i) {
+		//	XMLInfo info = _map_data[imageName].xmlInfo[i];
+		//	rectangle(im, Rect(info.xmin, info.ymin, info.xmax - info.xmin, info.ymax - info.ymin), Scalar(255, 255, 0), 1);
+		//}
+
 		float im_size_min = min(im.rows, im.cols);
 		float im_size_max = max(im.rows, im.cols);
 		float im_scale = cfg.TRAIN.MIN_SIZE / im_size_min;

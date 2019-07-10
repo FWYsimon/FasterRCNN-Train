@@ -1,4 +1,4 @@
-#include "common.h"
+﻿#include "common.h"
 #include "readxml.h"
 
 configure& getConfigure(){
@@ -223,7 +223,7 @@ float IoU2(const BBox& a, const BBox& b, NMS_TYPE type){
 	float uh = max(ymin - ymax + 1, 0);
 	float inter = uw * uh;
 
-	if (type == UNION)
+	if (type == MIN)
 		return inter / min(a.area(), b.area());
 	else
 		return inter / (a.area() + b.area() - inter);
@@ -304,6 +304,24 @@ Scalar getColor(int label){
 		colors.insert(colors.begin(), Scalar::all(255));
 	}
 	return colors[label % colors.size()];
+}
+
+/*
+flipCode，翻转模式:
+flipCode < 0水平垂直翻转（先沿X轴翻转，再沿Y轴翻转，等价于旋转180°）,
+flipCode == 0垂直翻转（沿X轴翻转），
+flipCode > 0水平翻转（沿Y轴翻转）
+*/
+void augmentation_flip(Mat& img_src, vector<XMLInfo>& item_pts){
+	int mode;
+	flip(img_src, img_src, 1);
+
+	for (int i = 0; i < item_pts.size(); ++i){
+		auto& item = item_pts[i];
+		item.xmin = img_src.cols - item.xmin;
+		item.xmax = img_src.cols - item.xmax;
+		swap(item.xmin, item.xmax);
+	}
 }
 
 map<string, vector<BBox>> rpn_generate_bbox;

@@ -28,6 +28,10 @@ prototxt/
 train_model/
 pretrain_model/
 *.prototxt
+20190702/
+20190704/
+retrain_model/
+test/
 ~AutoRecover.FasterRCNN-Train.vcxproj
 
 # Visual Studio 2015/2017 cache/options directory

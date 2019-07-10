@@ -54,6 +54,14 @@ public:
 
 		Blob* box_deltas = bottom[4];
 		Mat box_deltas_mat(box_deltas->num(), box_deltas->channel(), CV_32F, box_deltas->mutable_cpu_data());
+		for (int i = 0; i < box_deltas_mat.rows; ++i) {
+			for (int j = 0; j < box_deltas_mat.cols; j += 4) {
+				box_deltas_mat.at<float>(i, j) = box_deltas_mat.at<float>(i, j) * cfg.TRAIN.BBOX_NORMALIZE_STDS[0] + cfg.TRAIN.BBOX_NORMALIZE_MEANS[0];
+				box_deltas_mat.at<float>(i, j + 1) = box_deltas_mat.at<float>(i, j + 1) * cfg.TRAIN.BBOX_NORMALIZE_STDS[1] + cfg.TRAIN.BBOX_NORMALIZE_MEANS[1];
+				box_deltas_mat.at<float>(i, j + 2) = box_deltas_mat.at<float>(i, j + 2) * cfg.TRAIN.BBOX_NORMALIZE_STDS[2] + cfg.TRAIN.BBOX_NORMALIZE_MEANS[2];
+				box_deltas_mat.at<float>(i, j + 3) = box_deltas_mat.at<float>(i, j + 3) * cfg.TRAIN.BBOX_NORMALIZE_STDS[3] + cfg.TRAIN.BBOX_NORMALIZE_MEANS[3];
+			}
+		}
 		Mat pred_boxes = bbox_transform_inv(boxes, box_deltas_mat);
 		Mat out = clip_boxes(pred_boxes, im.rows, im.cols);
 
@@ -62,7 +70,7 @@ public:
 			vector<BBox> cls_dets;
 			vector<int> keep_inds;
 			for (int k = 0; k < scores.rows; ++k) {
-				if (scores.at<float>(k, j) > 0.1) {
+				if (scores.at<float>(k, j) > 0.65) {
 					BBox bbox;
 					bbox.score = scores.at<float>(k, j);
 					bbox.xmin = out.at<float>(k, j * 4);
@@ -75,13 +83,13 @@ public:
 				}
 			}
 
-			cls_dets = nms(cls_dets, cfg.TEST.NMS, keep_inds, MIN);
+			cls_dets = nms(cls_dets, 0.3, keep_inds, UNION);
 			all_boxes.insert(all_boxes.end(), cls_dets.begin(), cls_dets.end());
 		}
 
 		for (int j = 0; j < all_boxes.size(); ++j) {
 			rectangle(im, Rect(all_boxes[j].xmin, all_boxes[j].ymin, all_boxes[j].xmax - all_boxes[j].xmin, all_boxes[j].ymax - all_boxes[j].ymin), getColor(all_boxes[j].label), 1);
-			putText(im, labelmap[all_boxes[j].label], Point2f(all_boxes[j].xmin, all_boxes[j].ymin), 1, 1, getColor(all_boxes[j].label), 1);
+			putText(im, format("%s, %.2f", labelmap[all_boxes[j].label], all_boxes[j].score), Point2f(all_boxes[j].xmin, all_boxes[j].ymin), 1, 1, getColor(all_boxes[j].label), 1);
 		}
 		postMatrix(im, "image");
 	}
@@ -90,7 +98,6 @@ public:
 	}
 
 	virtual void reshape(Blob** bottom, int numBottom, Blob** top, int numTop) {
-
 	}
 };
 
@@ -202,8 +209,10 @@ void train_end_to_end(string solver_path, string pretrain_model) {
 	shared_ptr<Solver> solver = loadSolverFromPrototxt(solver_path.c_str());
 	setSolver(solver.get());
 	
-	solver->net()->weightsFromFile(pretrain_model.c_str());
-	
+	//solver->net()->weightsFromFile(pretrain_model.c_str());
+
+	solver->restore("20190704/vgg16_faster_rcnn_iter_70000.solverstate");
+
 	while (solver->iter() < solver->max_iter()) {
 		solver->step(1);
 
@@ -314,6 +323,14 @@ void faster_rcnn_end2end_test(string deploy, string pretrain_model) {
 		if (cfg.TEST.BBOX_REG) {
 			Blob* box_deltas = net->blob("bbox_pred");
 			Mat box_deltas_mat(box_deltas->num(), box_deltas->channel(), CV_32F, box_deltas->mutable_cpu_data());
+			for (int i = 0; i < box_deltas_mat.rows; ++i) {
+				for (int j = 0; j < box_deltas_mat.cols; j += 4) {
+					box_deltas_mat.at<float>(i, j) = box_deltas_mat.at<float>(i, j) * cfg.TRAIN.BBOX_NORMALIZE_STDS[0] + cfg.TRAIN.BBOX_NORMALIZE_MEANS[0];
+					box_deltas_mat.at<float>(i, j + 1) = box_deltas_mat.at<float>(i, j + 1) * cfg.TRAIN.BBOX_NORMALIZE_STDS[1] + cfg.TRAIN.BBOX_NORMALIZE_MEANS[1];
+					box_deltas_mat.at<float>(i, j + 2) = box_deltas_mat.at<float>(i, j + 2) * cfg.TRAIN.BBOX_NORMALIZE_STDS[2] + cfg.TRAIN.BBOX_NORMALIZE_MEANS[2];
+					box_deltas_mat.at<float>(i, j + 3) = box_deltas_mat.at<float>(i, j + 3) * cfg.TRAIN.BBOX_NORMALIZE_STDS[3] + cfg.TRAIN.BBOX_NORMALIZE_MEANS[3];
+				}
+			}
 			Mat pred_boxes = bbox_transform_inv(boxes, box_deltas_mat);
 			out = clip_boxes(pred_boxes, show.rows, show.cols);
 		}
@@ -323,7 +340,7 @@ void faster_rcnn_end2end_test(string deploy, string pretrain_model) {
 			vector<BBox> cls_dets;
 			vector<int> keep_inds;
 			for (int k = 0; k < scores.rows; ++k) {
-				if (scores.at<float>(k, j) > 0.5) {
+				if (scores.at<float>(k, j) >= 0.7) {
 					BBox bbox;
 					bbox.score = scores.at<float>(k, j);
 					bbox.xmin = out.at<float>(k, j * 4);
@@ -336,13 +353,13 @@ void faster_rcnn_end2end_test(string deploy, string pretrain_model) {
 				}
 			}
 
-			vector<BBox> one_cls_res = nms(cls_dets, cfg.TEST.NMS, keep_inds, MIN);
+			vector<BBox> one_cls_res = nms(cls_dets, cfg.TEST.NMS, keep_inds, UNION);
 			all_boxes.insert(all_boxes.end(), one_cls_res.begin(), one_cls_res.end());
 		}
 
 		for (int j = 0; j < all_boxes.size(); ++j) {
-			rectangle(show, Rect(all_boxes[j].xmin, all_boxes[j].ymin, all_boxes[j].xmax - all_boxes[j].xmin, all_boxes[j].ymax - all_boxes[j].ymin), Scalar(255, 255, 0), 1);
-			putText(show, labelmap[all_boxes[j].label], Point2f(all_boxes[j].xmin, all_boxes[j].ymin), 1, 1, Scalar(255, 255, 0), 1);
+			rectangle(show, Rect(all_boxes[j].xmin, all_boxes[j].ymin, all_boxes[j].xmax - all_boxes[j].xmin, all_boxes[j].ymax - all_boxes[j].ymin), getColor(all_boxes[j].label), 1);
+			putText(show, format("%s, %.2f", labelmap[all_boxes[j].label], all_boxes[j].score), Point2f(all_boxes[j].xmin, all_boxes[j].ymin), 1, 1, getColor(all_boxes[j].label), 1);
 		}
 
 		imshow("im", show);
@@ -429,9 +446,9 @@ int main() {
 	string model = "pretrain_model/faster_rcnn_models/VGG16_faster_rcnn_final.caffemodel";
 	rpn_generate(deploy, model);*/
 
-	//string deploy = "prototxt/faster_rcnn_end2end/test.prototxt";
-	//string model = "pretrain_model/faster_rcnn_models/VGG16_faster_rcnn_final.caffemodel";
-	//faster_rcnn_end2end_test(deploy, model);
+	/*string deploy = "prototxt/faster_rcnn_end2end/test.prototxt";
+	string model = "retrain_model/vgg16_faster_rcnn_iter_50000.caffemodel";
+	faster_rcnn_end2end_test(deploy, model);*/
 
 	string solver_path = "prototxt/faster_rcnn_end2end/solver.prototxt";
 	string model = "pretrain_model/imagenet_models/VGG16.v2.caffemodel";

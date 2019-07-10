@@ -2,36 +2,7 @@
 #include "common.h"
 
 
-struct XMLInfo
-{
-	float xmin, ymin, xmax, ymax;
-	string slabel;
-	vector<Point2f> GetBoxPoint(){
 
-		vector<Point2f> vecPointOut;
-		Point2f tmpPoint;
-		//左上
-		tmpPoint.x = xmin;
-		tmpPoint.y = ymin;
-		vecPointOut.push_back(tmpPoint);
-
-		//右上
-		tmpPoint.x = xmax;
-		tmpPoint.y = ymin;
-		vecPointOut.push_back(tmpPoint);
-
-		//左下
-		tmpPoint.x = xmin;
-		tmpPoint.y = ymax;
-		vecPointOut.push_back(tmpPoint);
-
-		//右下
-		tmpPoint.x = xmax;
-		tmpPoint.y = ymax;
-		vecPointOut.push_back(tmpPoint);
-		return vecPointOut;
-	}
-};
 
 class readxml
 {

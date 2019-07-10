@@ -41,6 +41,10 @@ void ProposalLayer::forward(Blob** bottom, int numBottom, Blob** top, int numTop
 	Blob* rpn_bbox_pred = bottom[1];
 	Blob* im_info = bottom[2];
 
+	/*paWriteToFile("rpn_cls_prob_reshape.feat", rpn_cls_prob_reshape->mutable_cpu_data(), rpn_cls_prob_reshape->count() * sizeof(float));
+	paWriteToFile("rpn_bbox_pred.feat", rpn_bbox_pred->mutable_cpu_data(), rpn_bbox_pred->count() * sizeof(float));
+	paWriteToFile("im_info.feat", im_info->mutable_cpu_data(), im_info->count() * sizeof(float));*/
+
 	int offset = _num_anchors * rpn_cls_prob_reshape->height() * rpn_cls_prob_reshape->width();
 	float* rpn_cls_ptr = rpn_cls_prob_reshape->mutable_cpu_data() + offset;
 	shared_ptr<Blob> rpn_cls_blob = newBlobByShape(rpn_cls_prob_reshape->num(), _num_anchors, rpn_cls_prob_reshape->height(), rpn_cls_prob_reshape->width());
@@ -123,7 +127,7 @@ void ProposalLayer::forward(Blob** bottom, int numBottom, Blob** top, int numTop
 	if (pre_nms_topN > 0 && keep_boxes.size() > pre_nms_topN)
 		keep_boxes.erase(keep_boxes.begin() + pre_nms_topN, keep_boxes.end());
 
-	keep_boxes = nms(keep_boxes, nms_thresh, keep_inds, MIN);
+	keep_boxes = nms(keep_boxes, nms_thresh, keep_inds, UNION);
 
 	if (post_nms_topN > 0 && keep_boxes.size() > post_nms_topN)
 		keep_boxes.erase(keep_boxes.begin() + post_nms_topN, keep_boxes.end());
@@ -138,6 +142,8 @@ void ProposalLayer::forward(Blob** bottom, int numBottom, Blob** top, int numTop
 		rois_ptr[4] = keep_boxes[i].ymax;
 		rois_ptr += 5;
 	}
+
+	
 
 	if (numTop > 1) {
 		top[1]->reshape(keep_boxes.size(), 1);

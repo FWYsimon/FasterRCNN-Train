@@ -25,6 +25,12 @@ void ProposalTargetLayer::forward(Blob** bottom, int numBottom, Blob** top, int 
 	float* all_rois_ptr = all_rois_blob->mutable_cpu_data();
 	float* gt_boxes_ptr = gt_boxes_blob->mutable_cpu_data();
 
+	//Mat all_rois_mat(all_rois_blob->num(), all_rois_blob->channel(), CV_32FC1, all_rois_blob->mutable_cpu_data());
+	//Mat gt_boxes_mat(gt_boxes_blob->num(), gt_boxes_blob->channel(), CV_32FC1, gt_boxes_blob->mutable_cpu_data());
+
+	//paWriteToFile("all_rois.feat", all_rois_blob->mutable_cpu_data(), all_rois_blob->count() * sizeof(float));
+	//paWriteToFile("gt_boxes.feat", gt_boxes_blob->mutable_cpu_data(), gt_boxes_blob->count() * sizeof(float));
+
 	int num_images = 1;
 	int rois_per_image = cfg.TRAIN.BATCH_SIZE / num_images;
 	int fg_rois_per_image = cvRound(cfg.TRAIN.FG_FRACTION * rois_per_image);
@@ -141,11 +147,11 @@ void ProposalTargetLayer::forward(Blob** bottom, int numBottom, Blob** top, int 
 	bbox_inside_weights->reshape(num_samples, 84, 1, 1);
 	bbox_outside_weights->reshape(num_samples, 84, 1, 1);
 
-	caffe_set(rois_blob->count(0), 0.0f, rois_blob->mutable_cpu_data());
-	caffe_set(labels_blob->count(0), 0.0f, labels_blob->mutable_cpu_data());
-	caffe_set(bbox_targets->count(0), 0.0f, bbox_targets->mutable_cpu_data());
-	caffe_set(bbox_inside_weights->count(0), 0.0f, bbox_inside_weights->mutable_cpu_data());
-	caffe_set(bbox_outside_weights->count(0), 0.0f, bbox_outside_weights->mutable_cpu_data());
+	caffe_set(rois_blob->count(), 0.0f, rois_blob->mutable_cpu_data());
+	caffe_set(labels_blob->count(), 0.0f, labels_blob->mutable_cpu_data());
+	caffe_set(bbox_targets->count(), 0.0f, bbox_targets->mutable_cpu_data());
+	caffe_set(bbox_inside_weights->count(), 0.0f, bbox_inside_weights->mutable_cpu_data());
+	caffe_set(bbox_outside_weights->count(), 0.0f, bbox_outside_weights->mutable_cpu_data());
 
 	for (int i = 0; i < num_samples; ++i) {
 		float* rois_ptr = rois_blob->mutable_cpu_data() + i * rois_blob->count(1);

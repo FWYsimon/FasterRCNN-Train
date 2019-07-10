@@ -12,7 +12,6 @@
 #include <windows.h>
 #include "tinyxml/tinyxml.h"
 
-
 #define max(a,b)    (((a) > (b)) ? (a) : (b))
 #define min(a,b)    (((a) < (b)) ? (a) : (b))
 
@@ -25,6 +24,37 @@ using namespace cc;
 enum NMS_TYPE{
 	MIN,
 	UNION,
+};
+
+struct XMLInfo
+{
+	float xmin, ymin, xmax, ymax;
+	string slabel;
+	vector<Point2f> GetBoxPoint(){
+
+		vector<Point2f> vecPointOut;
+		Point2f tmpPoint;
+		//左上
+		tmpPoint.x = xmin;
+		tmpPoint.y = ymin;
+		vecPointOut.push_back(tmpPoint);
+
+		//右上
+		tmpPoint.x = xmax;
+		tmpPoint.y = ymin;
+		vecPointOut.push_back(tmpPoint);
+
+		//左下
+		tmpPoint.x = xmin;
+		tmpPoint.y = ymax;
+		vecPointOut.push_back(tmpPoint);
+
+		//右下
+		tmpPoint.x = xmax;
+		tmpPoint.y = ymax;
+		vecPointOut.push_back(tmpPoint);
+		return vecPointOut;
+	}
 };
 
 struct configure{
@@ -82,6 +112,8 @@ void caffe_set(int count, float val, float* ptr);
 
 Scalar getColor(int label);
 
+void augmentation_flip(Mat& img_src, vector<XMLInfo>& item_pts);
+
 struct ConfigTrain{
 	//anchor target layer
 	int IMS_PER_BATCH = 1;
@@ -102,7 +134,7 @@ struct ConfigTrain{
 
 	const float FG_THRESH = 0.5;
 	const float BG_THRESH_HI = 0.5;
-	float BG_THRESH_LO = 0.1;
+	float BG_THRESH_LO = 0.0;
 	const float BBOX_THRESH = 0.5;
 
 	bool HAS_RPN = true;
@@ -116,8 +148,8 @@ struct ConfigTrain{
 	const int RPN_MIN_SIZE = 16;
 
 	int SNAPSHOT_ITERS = 2000;
-	string SNAPSHOT_PREFIX = "train_model/vgg16_faster_rcnn";
-	string PARAM_SNAPSHOT_PREFIX = "train_model/param_vgg16_faster_rcnn";
+	string SNAPSHOT_PREFIX = "20190704/vgg16_faster_rcnn";
+	string PARAM_SNAPSHOT_PREFIX = "20190704/param_vgg16_faster_rcnn";
 
 
 	bool BBOX_NORMALIZE_TARGETS_PRECOMPUTED = false;
@@ -146,7 +178,7 @@ struct ConfigTest{
 	bool HAS_RPN = true;
 	bool BBOX_REG = true;
 
-	float NMS = 0.3;
+	float NMS = 0.3f;
 };
 
 static struct Config{
